@@ -1,0 +1,102 @@
+# Builds SSHTron for the Asciiverse catalog: one archive per target, named
+# <id>-<target>.tar.gz (Linux, macOS) or .zip (Windows), plus a SHA256SUMS
+# file, attached to a GitHub release (hub/catalog/SCHEMA.md,
+# release.source = "github"). Runs on our tags (*-av.*), or by hand for an
+# existing tag. Upstream has no workflows of its own.
+#
+# Go cross-compiles every target from one Linux runner. With CGO off the
+# binaries are fully static, so the Linux ones carry the -musl triple that
+# av looks for first.
+
+name: release
+
+on:
+  push:
+    tags: ["*-av.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing tag to build and release"
+        required: true
+
+env:
+  ID: sshtron
+  BIN: sshtron
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, goos: linux, goarch: amd64 }
+          - { target: aarch64-unknown-linux-musl, goos: linux, goarch: arm64 }
+          - { target: x86_64-apple-darwin, goos: darwin, goarch: amd64 }
+          - { target: aarch64-apple-darwin, goos: darwin, goarch: arm64 }
+          - { target: x86_64-pc-windows-msvc, goos: windows, goarch: amd64 }
+          - { target: aarch64-pc-windows-msvc, goos: windows, goarch: arm64 }
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          ext=""
+          [ "$GOOS" = windows ] && ext=".exe"
+          mkdir -p stage
+          go build -trimpath -ldflags="-s -w -X main.version=$TAG" -o "stage/$BIN$ext" .
+
+      - name: Package
+        run: |
+          out="$ID-${{ matrix.target }}"
+          # the binary sits at the top of the archive, where av looks for it
+          mkdir -p dist
+          cp LICENSE README.md PATCHES.md stage/
+          # golang-petname (Apache-2.0) names the games; its licence goes along
+          cp asciiverse/PETNAME-LICENSE stage/
+          if [ "${{ matrix.goos }}" = windows ]; then
+            (cd stage && zip -r "../dist/$out.zip" .)
+          else
+            tar -czf "dist/$out.tar.gz" -C stage .
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "SSHTron $TAG" \
+                 --notes "SSHTron $TAG from github.com/zachlatta/sshtron, with the changes in PATCHES.md, built for the Asciiverse catalog."
+          gh release upload "$TAG" dist/* -R "$GITHUB_REPOSITORY" --clobber
