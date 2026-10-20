@@ -1,131 +1,133 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"golang.org/x/crypto/ssh"
-	"io/ioutil"
+	"io"
+	"log"
 	"net"
-	"net/http"
 	"os"
+	"strconv"
+
+	"github.com/fatih/color"
 )
 
 const (
-	sshPortEnv  = "SSH_PORT"
-	httpPortEnv = "PORT"
+	sshPortEnv     = "SSH_PORT"
+	defaultSshPort = 2022
 
-	defaultSshPort  = "2022"
-	defaultHttpPort = "3000"
+	publicServer = "sshtron.zachlatta.com"
 )
 
-func handler(conn net.Conn, gm *GameManager, config *ssh.ServerConfig) {
-	// Before use, a handshake must be performed on the incoming
-	// net.Conn.
-	sshConn, chans, reqs, err := ssh.NewServerConn(conn, config)
-	if err != nil {
-		fmt.Println("Failed to handshake with new client")
-		return
-	}
-	// The incoming Request channel must be serviced.
-	go ssh.DiscardRequests(reqs)
-
-	// Service the incoming Channel channel.
-	for newChannel := range chans {
-		// Channels have a type, depending on the application level
-		// protocol intended. In the case of a shell, the type is
-		// "session" and ServerShell may be used to present a simple
-		// terminal interface.
-		if newChannel.ChannelType() != "session" {
-			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
-			continue
-		}
-		channel, requests, err := newChannel.Accept()
-		if err != nil {
-			fmt.Println("could not accept channel.")
-			return
-		}
-
-		// TODO: Remove this -- only temporary while we launch on HN
-		//
-		// To see how many concurrent users are online
-		fmt.Printf("Player joined. Current stats: %d users, %d games\n",
-			gm.SessionCount(), gm.GameCount())
-
-		// Reject all out of band requests accept for the unix defaults, pty-req and
-		// shell.
-		go func(in <-chan *ssh.Request) {
-			for req := range in {
-				switch req.Type {
-				case "pty-req":
-					req.Reply(true, nil)
-					continue
-				case "shell":
-					req.Reply(true, nil)
-					continue
-				}
-				req.Reply(false, nil)
-			}
-		}(requests)
-
-		gm.HandleNewChannel(channel, sshConn.User())
-	}
-}
-
-func port(env, def string) string {
-	port := os.Getenv(env)
-	if port == "" {
-		port = def
-	}
-
-	return fmt.Sprintf(":%s", port)
-}
+var version = "dev"
 
 func main() {
-	sshPort := port(sshPortEnv, defaultSshPort)
-	httpPort := port(httpPortEnv, defaultHttpPort)
-
-	// Everyone can login!
-	config := &ssh.ServerConfig{
-		NoClientAuth: true,
-	}
-
-	privateBytes, err := ioutil.ReadFile("id_rsa")
-	if err != nil {
-		panic("Failed to load private key")
-	}
-
-	private, err := ssh.ParsePrivateKey(privateBytes)
-	if err != nil {
-		panic("Failed to parse private key")
-	}
-
-	config.AddHostKey(private)
-
-	// Create the GameManager
-	gm := NewGameManager()
-
-	fmt.Printf(
-		"Listening on port %s for SSH and port %s for HTTP...\n",
-		sshPort,
-		httpPort,
+	var (
+		server  = flag.Bool("server", false, "run only the server, for others to join with ssh")
+		play    = flag.Bool("play", false, "skip the menu: host a game here and play in it")
+		join    = flag.String("join", "", "skip the menu: join the game at `host[:port]`")
+		online  = flag.Bool("online", false, "skip the menu: join the public server, "+publicServer)
+		demo    = flag.Bool("demo", false, "host a game and watch the computer play; any key ends it")
+		port    = flag.Int("port", 0, "SSH port to host on (default 2022, or $SSH_PORT)")
+		bots    = flag.Int("bots", -1, "computer players in each game (default 3, none with -server)")
+		colour  = flag.String("color", "", "colour to ask for: red, green, yellow, blue, magenta, cyan or white")
+		showVer = flag.Bool("version", false, "print the version")
 	)
-
-	go func() {
-		panic(http.ListenAndServe(httpPort, http.FileServer(http.Dir("./static/"))))
-	}()
-
-	// Once a ServerConfig has been configured, connections can be
-	// accepted.
-	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0%s", sshPort))
-	if err != nil {
-		panic("failed to listen for connection")
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: sshtron [options]\n\n"+
+			"With no options, a menu: play here against the computer (friends on\n"+
+			"your network can join), play on the public server, or join a friend.\n\n")
+		flag.PrintDefaults()
 	}
+	flag.Parse()
+
+	if *showVer {
+		fmt.Println("sshtron", version)
+		return
+	}
+
+	// the colours are sent to the players, whatever this process's own
+	// output is
+	color.NoColor = false
+
+	sshPort := *port
+	if sshPort == 0 {
+		sshPort = defaultSshPort
+		if p, err := strconv.Atoi(os.Getenv(sshPortEnv)); err == nil {
+			sshPort = p
+		}
+	}
+
+	if *server {
+		if *bots < 0 {
+			*bots = 0
+		}
+		runServer(sshPort, *bots)
+		return
+	}
+
+	if *bots < 0 {
+		*bots = 3
+	}
+	if *bots > len(playerColors)-1 {
+		*bots = len(playerColors) - 1
+	}
+
+	// The server's log would land in the middle of the game, so it goes to
+	// $SSHTRON_LOG or nowhere.
+	log.SetOutput(io.Discard)
+	if path := os.Getenv("SSHTRON_LOG"); path != "" {
+		if f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+			log.SetOutput(f)
+		}
+	}
+
+	app, err := newApp(*colour)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sshtron:", err)
+		os.Exit(1)
+	}
+	defer app.close()
+
+	switch {
+	case *join != "":
+		err = app.join(*join)
+	case *online:
+		err = app.join(publicServer)
+	case *play, *demo:
+		err = app.host(sshPort, *bots, *demo)
+	default:
+		app.menu(sshPort, *bots)
+	}
+	app.close()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sshtron:", err)
+		os.Exit(1)
+	}
+}
+
+// runServer is the upstream server: games for anyone who connects, until it
+// is stopped.
+func runServer(port, bots int) {
+	config, err := serverConfig(true)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	gm := NewGameManager(bots)
+
+	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Listening on port %d for SSH...", port)
 
 	for {
 		nConn, err := listener.Accept()
 		if err != nil {
-			panic("failed to accept incoming connection")
+			log.Fatal(err)
 		}
 
-		go handler(nConn, gm, config)
+		go handler(nConn, gm, config, false, false)
 	}
 }

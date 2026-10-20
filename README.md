@@ -18,21 +18,26 @@ There are total 7 colors to choose from: Red, Green, Yellow, Blue, Magenta, Cyan
 
 If the color you picked is already taken in all open games, you'll randomly be assigned a color.
 
+## Playing without a server
+
+`sshtron` on its own opens a menu: play a game hosted on your own machine
+against computer players (friends on your network join it with
+`sshtron -join <your address>` or `ssh -p 2022 <your address>`), play on
+the public server, or join a friend's game. It carries its own SSH client,
+so nothing else is needed, on Windows too. `sshtron -help` lists the
+options.
+
 ## Running Your Own Copy
 
-Clone the project and `cd` into its directory. These instructions assume that you have your `GOPATH` setup correctly.
-
 ```sh
-# Create an RSA public/private keypair in the current directory for the server
-# to use. Don't give it a passphrase.
-$ ssh-keygen -t rsa -f id_rsa
+# Compile the project
+$ go build
 
-# Download dependencies and compile the project
-$ go get && go build
-
-# Run it! You can set PORT to customize the HTTP port it serves on and SSH_PORT
-# to customize the SSH port it serves on.
-$ ./sshtron
+# Run the server. It makes a host key in its data folder the first time
+# (an id_rsa in the current directory is used instead if there is one).
+# -port or SSH_PORT sets the SSH port (2022), -bots N keeps N computer
+# players in each game.
+$ ./sshtron -server
 ```
 
 ## Running under a Docker container
