@@ -121,3 +121,9 @@ client (arrow keys turned into WASD, the colour asked for, the host key
 saved), `-server` with OpenSSH players, and `-demo` ended by a key.
 macOS and Windows: cross-built for both architectures, not run (Wine
 is not installed here now).
+
+## Ours
+
+- **How to play it, at the top of README.md.** A short note on installing and
+  starting it with av, or from a release archive; the original text follows
+  unchanged.

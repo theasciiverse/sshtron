@@ -1,3 +1,16 @@
+> **Play it with Asciiverse.** With [av](https://asciiverse.sh), the Asciiverse
+> client:
+>
+> ```
+> av install sshtron
+> av play sshtron
+> ```
+>
+> Or download the archive for your system from this repository's Releases,
+> unpack it and run `./sshtron` (`sshtron.exe` on Windows).
+>
+> The original README follows.
+
 # ![SSHTron](https://cdn.rawgit.com/zachlatta/sshtron/master/logo.svg)
 
 SSHTron is a multiplayer lightcycle game that runs through SSH. Just run the command below and you'll be playing in seconds:
