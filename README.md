@@ -6,9 +6,6 @@
 > av play sshtron
 > ```
 >
-> Or download the archive for your system from this repository's Releases,
-> unpack it and run `./sshtron` (`sshtron.exe` on Windows).
->
 > The original README follows.
 
 # ![SSHTron](https://cdn.rawgit.com/zachlatta/sshtron/master/logo.svg)
